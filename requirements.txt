@@ -1,8 +1,8 @@
 streamlit
-tensorflow==2.15.1
 yfinance
 scikit-learn
 plotly
 pandas
-numpy<2.0
-matplotlib
+numpy
+tensorflow-cpu
+keras
