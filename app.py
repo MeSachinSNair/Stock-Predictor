@@ -1,4 +1,10 @@
 # app.py - Streamlit Cloud Compatible Version
+import warnings
+warnings.filterwarnings('ignore')
+
+# Fix for yfinance on cloud
+import os
+os.environ['YFINANCE_NO_CACHE'] = '1'
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -368,24 +374,77 @@ st.markdown("""
 @st.cache_data(ttl=300)
 def fetch_stock_data(ticker, period):
     try:
-        stock = yf.Ticker(ticker)
-        df    = stock.history(period=period, interval="1d")
+        # Method 1: Standard download
+        df = yf.download(
+            ticker,
+            period=period,
+            interval="1d",
+            progress=False,
+            auto_adjust=True,
+            threads=False
+        )
+
+        # Flatten MultiIndex columns if present
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+        if df is None or df.empty:
+            raise ValueError("Empty dataframe")
+
+        # Try to get info safely
+        info = {}
         try:
-            raw  = stock.info
-            info = {
-                'name':         raw.get('longName', ticker),
-                'sector':       raw.get('sector', 'N/A'),
-                'market_cap':   raw.get('marketCap', 0),
-                'pe_ratio':     raw.get('trailingPE', 0),
-                'week_52_high': raw.get('fiftyTwoWeekHigh', 0),
-                'week_52_low':  raw.get('fiftyTwoWeekLow', 0),
-                'beta':         raw.get('beta', 0),
+            stock = yf.Ticker(ticker)
+            raw   = stock.fast_info
+            info  = {
+                'name':         ticker,
+                'sector':       'N/A',
+                'market_cap':   getattr(raw, 'market_cap', 0) or 0,
+                'pe_ratio':     0,
+                'week_52_high': getattr(raw, 'fifty_two_week_high', 0) or 0,
+                'week_52_low':  getattr(raw, 'fifty_two_week_low', 0) or 0,
+                'beta':         0,
             }
         except:
-            info = {'name': ticker, 'sector': 'N/A', 'market_cap': 0,
-                    'pe_ratio': 0, 'week_52_high': 0, 'week_52_low': 0, 'beta': 0}
+            info = {
+                'name': ticker, 'sector': 'N/A',
+                'market_cap': 0, 'pe_ratio': 0,
+                'week_52_high': 0, 'week_52_low': 0, 'beta': 0
+            }
+
         return df, info
+
     except Exception as e:
+        # Method 2: Fallback with different settings
+        try:
+            import time
+            time.sleep(2)
+            df = yf.download(
+                ticker,
+                period=period,
+                interval="1d",
+                progress=False,
+                auto_adjust=True,
+                threads=False,
+                timeout=30
+            )
+
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+
+            if df is not None and not df.empty:
+                info = {
+                    'name': ticker, 'sector': 'N/A',
+                    'market_cap': 0, 'pe_ratio': 0,
+                    'week_52_high': float(df['High'].max()),
+                    'week_52_low':  float(df['Low'].min()),
+                    'beta': 0
+                }
+                return df, info
+
+        except Exception as e2:
+            pass
+
         return None, {}
 
 def add_indicators(df):
@@ -504,7 +563,6 @@ with st.sidebar:
     lookback     = st.slider("Lookback Window", 10, 60, 30)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Model Settings
     st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-section-title">🤖 Model Settings</div>', unsafe_allow_html=True)
     model_type = st.selectbox("Algorithm", [
@@ -679,7 +737,6 @@ with tab1:
             </div>""", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Returns card
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
         st.markdown('<div class="section-title"><div class="section-title-icon">📉</div>Returns</div>', unsafe_allow_html=True)
         for label, days in [("1W",5),("1M",21),("3M",63),("6M",126),("1Y",252)]:
@@ -881,7 +938,6 @@ with tab3:
         pb.progress(100)
         st_txt.markdown('<p style="color:#00ff88;font-weight:700;">✅ Done!</p>', unsafe_allow_html=True)
 
-        # Store results
         st.session_state.results = {
             'y_test_actual': y_test_actual,
             'y_pred_actual': y_pred_actual,
@@ -892,7 +948,6 @@ with tab3:
             'model_type': model_type,
         }
 
-    # Show results if available
     if st.session_state.results is not None:
         res = st.session_state.results
         fp  = np.array(res['future_prices'])
@@ -989,9 +1044,6 @@ with tab3:
         st.markdown('<div class="section-title"><div class="section-title-icon">📊</div>Actual vs Predicted</div>', unsafe_allow_html=True)
 
         fig_avp = go.Figure()
-        test_idx = res['test_index']
-        n_pts    = min(len(test_idx), len(res['y_test_actual']), len(res['y_pred_actual']))
-
         fig_avp.add_trace(go.Scatter(
             x=res['idx_test'][:n], y=res['y_test_actual'][:n],
             name="Actual", line=dict(color='#00d4ff', width=2)
@@ -1076,9 +1128,7 @@ with tab4:
 
 # ── TAB 5: STOCK INFO ──
 with tab5:
-    info = st.session_state.info
     name = info.get('name', ticker)
-
     st.markdown(f"""
     <div class="section-card">
         <div style="display:flex;align-items:center;gap:16px;margin-bottom:1.5rem;">
@@ -1132,7 +1182,6 @@ with tab5:
         colorscale=[[0,'#ff4757'],[0.5,'#141b2d'],[1,'#00d4ff']],
         zmid=0, text=np.round(cm.values,2),
         texttemplate="%{text}", textfont=dict(size=10),
-        hovertemplate='%{x} vs %{y}: %{z:.3f}<extra></extra>'
     ))
     fig_c.update_layout(**PLOTLY_LAYOUT, height=380)
     st.plotly_chart(fig_c, use_container_width=True, config={'displayModeBar': False})
