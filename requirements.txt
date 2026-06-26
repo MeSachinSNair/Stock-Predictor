@@ -3,5 +3,5 @@ pandas
 numpy
 plotly
 yfinance==0.2.51
+curl_cffi
 scikit-learn
-requests
